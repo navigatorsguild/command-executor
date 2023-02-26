@@ -1,5 +1,5 @@
 use std::thread::{Builder, JoinHandle};
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex};
 use std::error::Error;
 use std::time::Duration;
 use crate::errors::GenericError;
@@ -8,19 +8,43 @@ use crate::executor::command::Command;
 use crate::executor::shutdown_mode::ShutdownMode;
 use crate::executor::signal::Signal;
 use crate::executor::signal::Signal::Shutdown;
-use crate::executor::signal::Signal::Reload;
+
+struct RunInAllThreadsCommand {
+    f: Arc<Mutex<dyn FnMut() + Send + Sync>>,
+    b: Arc<Barrier>,
+}
+
+impl RunInAllThreadsCommand {
+    pub fn new(f: Arc<Mutex<dyn FnMut() + Send + Sync>>, b: Arc<Barrier>) -> RunInAllThreadsCommand {
+        RunInAllThreadsCommand {
+            f,
+            b,
+        }
+    }
+}
+
+impl Command for RunInAllThreadsCommand {
+    fn execute(&self) -> Result<(), GenericError> {
+        self.b.wait();
+        let mut f = self.f.lock().unwrap();
+        f();
+        Ok(())
+    }
+}
 
 pub struct ThreadPool {
     name: String,
+    tasks: usize,
     queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
     threads: Vec<JoinHandle<Result<(), GenericError>>>,
     join_error_handler: fn(String, String),
     shutdown_mode: ShutdownMode,
+    expired: bool,
 }
 
 impl ThreadPool {
     pub(crate) fn new(name: String, tasks: usize, queue_size: usize, join_error_handler: fn(String, String), shutdown_mode: ShutdownMode) -> Result<ThreadPool, GenericError> {
-        let start_barrier = Arc::new(Barrier::new(tasks));
+        let start_barrier = Arc::new(Barrier::new(tasks + 1));
         let mut threads = Vec::<JoinHandle<Result<(), GenericError>>>::new();
         let queue = Arc::new(BlockingQueue::<Box<dyn Command + Send + Sync>, Signal>::new(queue_size));
         for i in 0..tasks {
@@ -35,15 +59,23 @@ impl ThreadPool {
             threads.push(t.unwrap());
         }
 
+        start_barrier.wait();
+
         Ok(
             ThreadPool {
                 name,
+                tasks,
                 queue: queue.clone(),
                 threads,
                 join_error_handler,
                 shutdown_mode,
+                expired: false,
             }
         )
+    }
+
+    pub fn tasks(&self) -> usize {
+        self.tasks
     }
 
     fn create_thread(
@@ -74,7 +106,6 @@ impl ThreadPool {
                                 Shutdown => {
                                     break r;
                                 }
-                                Reload => {}
                             }
                         }
                     }
@@ -83,7 +114,16 @@ impl ThreadPool {
         )
     }
 
-    pub fn shutdown(&self) {
+    pub fn in_all_threads(&self, f: Arc<Mutex<dyn FnMut() + Send + Sync>>) {
+        let b = Arc::new(Barrier::new(self.tasks + 1));
+        for _i in 0..self.tasks {
+            self.submit(Box::new(RunInAllThreadsCommand::new(f.clone(), b.clone())));
+        }
+        b.wait();
+    }
+
+    pub fn shutdown(&mut self) {
+        self.expired = true;
         match self.shutdown_mode {
             ShutdownMode::Immediate => {
                 self.queue.signal(Shutdown);
@@ -131,6 +171,9 @@ impl ThreadPool {
     }
 
     pub fn submit(&self, command: Box<dyn Command + Send + Sync>) {
+        if self.expired {
+            panic!("the thread pool {} is expired", self.name)
+        }
         self.try_submit(command, Duration::MAX);
     }
 
@@ -167,7 +210,6 @@ mod tests {
             Ok(())
         }
     }
-
 
     #[test]
     fn test_create() {
@@ -207,6 +249,7 @@ mod tests {
         }
 
         tp.shutdown();
+        tp.join().expect("Failed to join thread pool");
         assert_eq!((), tp.join().unwrap());
         // accidental but usually works
         // if fails safe to comment out the test_shutdown_when_empty tests superset of this test
@@ -232,6 +275,7 @@ mod tests {
         }
 
         tp.shutdown();
+        tp.join().expect("Failed to join thread pool");
         assert_eq!((), tp.join().unwrap());
         assert_eq!(execution_counter.fetch_or(0, Ordering::Relaxed), 1024);
     }
@@ -273,5 +317,32 @@ mod tests {
         tp.shutdown();
         let r = tp.join();
         assert!(r.is_err());
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_use_after_join() {
+        let mut thread_pool_builder = ThreadPoolBuilder::new();
+        let mut tp = thread_pool_builder
+            .name("t".to_string())
+            .tasks(4)
+            .queue_size(2048)
+            .shutdown_mode(ShutdownMode::CompletePending)
+            .build()
+            .unwrap();
+
+        let execution_counter = Arc::new(AtomicUsize::from(0));
+        for _i in 0..1024 {
+            let ec = execution_counter.clone();
+            tp.submit(Box::new(TestCommand::new(4, ec)));
+        }
+
+        tp.shutdown();
+        tp.join().expect("Failed to join thread pool");
+        let execution_counter = Arc::new(AtomicUsize::from(0));
+        for _i in 0..1024 {
+            let ec = execution_counter.clone();
+            tp.submit(Box::new(TestCommand::new(4, ec)));
+        }
     }
 }

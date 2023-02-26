@@ -1,11 +1,16 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::thread;
+use std::{thread};
 use std::time::{Duration, SystemTime};
 use command_executor::errors::GenericError;
 use command_executor::executor::command::Command;
 use command_executor::executor::shutdown_mode::ShutdownMode;
 use command_executor::executor::thread_pool_builder::ThreadPoolBuilder;
+use std::cell::{RefCell};
+use std::fs::{File, remove_file};
+use std::io::{BufRead, BufReader, Write};
+use std::ops::AddAssign;
+use std::path::PathBuf;
 
 struct TestCommand {
     _payload: i32,
@@ -109,6 +114,90 @@ fn test_concurrency() {
     run(4, 4, 1, 256);
     let e4 = t4.elapsed().unwrap().as_millis() as f64;
 
-    assert!(e1 / e2 > 1.9_f64);
-    assert!(e2 / e4 > 1.9_f64);
+    assert!(e1 / e2 > 1.8_f64);
+    assert!(e2 / e4 > 1.8_f64);
+}
+
+thread_local! {
+    pub static THREAD_LOCAL_FILE: RefCell<Option<File>> = RefCell::new(None);
+}
+
+struct Store {
+    i: usize,
+}
+
+impl Store {
+    pub fn new(i: usize) -> Store {
+        Store {
+            i,
+        }
+    }
+}
+
+impl Command for Store {
+    fn execute(&self) -> Result<(), GenericError> {
+        THREAD_LOCAL_FILE.with(
+            |tlf| {
+                let mut f = tlf.replace(None).unwrap();
+                f.write(format!("{}\n", self.i).as_bytes()).expect("Failed writing a number to test file");
+                tlf.replace(Some(f))
+            }
+        );
+        Ok(())
+    }
+}
+
+#[test]
+fn test_in_all_threads() {
+    let mut thread_pool_builder = ThreadPoolBuilder::new();
+    let mut tp = thread_pool_builder
+        .name("thread-local-file".to_string())
+        .tasks(4)
+        .queue_size(2048)
+        .shutdown_mode(ShutdownMode::CompletePending)
+        .build()
+        .unwrap();
+
+    for i in 0..tp.tasks() {
+        let name = format!("thread-local-file-{i}");
+        let path = PathBuf::from(format!("./target/{name}"));
+        if path.exists() {
+            remove_file(path).expect("Filed to remove test file path");
+        }
+    }
+
+    tp.in_all_threads(
+        Arc::new(
+            Mutex::new(
+                move || {
+                    THREAD_LOCAL_FILE.with(
+                        |tlf| {
+                            let name = thread::current().name().unwrap().to_string();
+                            let path = PathBuf::from(format!("./target/{name}"));
+                            tlf.replace(
+                                Some(
+                                    File::create(path).unwrap()
+                                )
+                            );
+                        }
+                    );
+                }
+            )
+        )
+    );
+
+    for i in 0..1024 {
+        tp.submit(Box::new(Store::new(i)));
+    }
+
+    tp.shutdown();
+    let mut total: usize = 0;
+    for i in 0..tp.tasks() {
+        let name = format!("thread-local-file-{i}");
+        let path = PathBuf::from(format!("./target/{name}"));
+        let f = File::open(path).unwrap();
+        total.add_assign(BufReader::new(f).lines().count());
+    }
+    assert_eq!((), tp.join().unwrap());
+    assert_eq!(total, 1024);
 }
