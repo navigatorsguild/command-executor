@@ -4,7 +4,7 @@ use std::error::Error;
 use std::time::Duration;
 use crate::errors::GenericError;
 use crate::executor::blocking_queue::BlockingQueue;
-use crate::executor::command::Command;
+use crate::executor::Command;
 use crate::executor::shutdown_mode::ShutdownMode;
 use crate::executor::signal::Signal;
 use crate::executor::signal::Signal::Shutdown;
