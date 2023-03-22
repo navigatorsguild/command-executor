@@ -1,4 +1,5 @@
-use std::thread::{Builder, JoinHandle};
+use std::cell::RefCell;
+use std::thread::{Builder, JoinHandle, LocalKey};
 use std::sync::{Arc, Barrier, Mutex};
 use std::error::Error;
 use std::time::Duration;
@@ -25,9 +26,11 @@ impl RunInAllThreadsCommand {
 
 impl Command for RunInAllThreadsCommand {
     fn execute(&self) -> Result<(), GenericError> {
+        {
+            let mut f = self.f.lock().unwrap();
+            f();
+        }
         self.b.wait();
-        let mut f = self.f.lock().unwrap();
-        f();
         Ok(())
     }
 }
@@ -121,6 +124,24 @@ impl ThreadPool {
         }
         b.wait();
     }
+
+    pub fn set_thread_local<T>(&mut self, local_key: &'static LocalKey<RefCell<T>>, val: T)
+        where T: Sync + Send + Clone {
+        self.in_all_threads(
+            Arc::new(
+                Mutex::new(
+                    move || {
+                        local_key.with(
+                            |value| {
+                                value.replace(val.clone())
+                            }
+                        );
+                    }
+                )
+            )
+        );
+    }
+
 
     pub fn shutdown(&mut self) {
         self.expired = true;
