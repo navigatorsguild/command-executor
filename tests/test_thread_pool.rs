@@ -2,7 +2,6 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{thread};
 use std::time::{Duration, SystemTime};
-use command_executor::errors::GenericError;
 use command_executor::executor::{Command, ShutdownMode};
 use command_executor::executor::ThreadPoolBuilder;
 use std::cell::{RefCell};
@@ -26,7 +25,7 @@ impl TestCommand {
 }
 
 impl Command for TestCommand {
-    fn execute(&self) -> Result<(), GenericError> {
+    fn execute(&self) -> Result<(), anyhow::Error> {
         self.execution_counter.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
@@ -70,7 +69,7 @@ impl SleepyCommand {
 }
 
 impl Command for SleepyCommand {
-    fn execute(&self) -> Result<(), GenericError> {
+    fn execute(&self) -> Result<(), anyhow::Error> {
         thread::sleep(Duration::from_millis(self.sleep_time));
         self.execution_counter.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -134,7 +133,7 @@ impl Store {
 }
 
 impl Command for Store {
-    fn execute(&self) -> Result<(), GenericError> {
+    fn execute(&self) -> Result<(), anyhow::Error> {
         THREAD_LOCAL_FILE.with(
             |tlf| {
                 let mut f = tlf.replace(None).unwrap();

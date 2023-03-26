@@ -1,4 +1,3 @@
-use crate::errors::GenericError;
 use crate::executor::shutdown_mode::ShutdownMode;
 use crate::executor::thread_pool::ThreadPool;
 
@@ -53,7 +52,7 @@ impl ThreadPoolBuilder {
         self
     }
 
-    pub fn build(&self) -> Result<ThreadPool, GenericError> {
+    pub fn build(&self) -> Result<ThreadPool, anyhow::Error> {
         ThreadPool::new(
             self.name.clone(),
             self.tasks,

@@ -4,10 +4,8 @@ pub(crate) mod thread_pool_builder;
 pub(crate) mod signal;
 pub(crate) mod shutdown_mode;
 
-use crate::errors::GenericError;
-
 pub trait Command {
-    fn execute(&self) -> Result<(), GenericError>;
+    fn execute(&self) -> Result<(), anyhow::Error>;
 }
 
 pub type BlockingQueue<E, S> = blocking_queue::BlockingQueue<E, S>;

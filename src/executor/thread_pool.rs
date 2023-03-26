@@ -3,7 +3,7 @@ use std::thread::{Builder, JoinHandle, LocalKey};
 use std::sync::{Arc, Barrier, Mutex};
 use std::error::Error;
 use std::time::Duration;
-use crate::errors::GenericError;
+use anyhow::anyhow;
 use crate::executor::blocking_queue::BlockingQueue;
 use crate::executor::Command;
 use crate::executor::shutdown_mode::ShutdownMode;
@@ -25,7 +25,7 @@ impl RunInAllThreadsCommand {
 }
 
 impl Command for RunInAllThreadsCommand {
-    fn execute(&self) -> Result<(), GenericError> {
+    fn execute(&self) -> Result<(), anyhow::Error> {
         {
             let mut f = self.f.lock().unwrap();
             f();
@@ -39,16 +39,16 @@ pub struct ThreadPool {
     name: String,
     tasks: usize,
     queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
-    threads: Vec<JoinHandle<Result<(), GenericError>>>,
+    threads: Vec<JoinHandle<Result<(), anyhow::Error>>>,
     join_error_handler: fn(String, String),
     shutdown_mode: ShutdownMode,
     expired: bool,
 }
 
 impl ThreadPool {
-    pub(crate) fn new(name: String, tasks: usize, queue_size: usize, join_error_handler: fn(String, String), shutdown_mode: ShutdownMode) -> Result<ThreadPool, GenericError> {
+    pub(crate) fn new(name: String, tasks: usize, queue_size: usize, join_error_handler: fn(String, String), shutdown_mode: ShutdownMode) -> Result<ThreadPool, anyhow::Error> {
         let start_barrier = Arc::new(Barrier::new(tasks + 1));
-        let mut threads = Vec::<JoinHandle<Result<(), GenericError>>>::new();
+        let mut threads = Vec::<JoinHandle<Result<(), anyhow::Error>>>::new();
         let queue = Arc::new(BlockingQueue::<Box<dyn Command + Send + Sync>, Signal>::new(queue_size));
         for i in 0..tasks {
             let barrier = start_barrier.clone();
@@ -87,13 +87,13 @@ impl ThreadPool {
         barrier: Arc<Barrier>,
         queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
         builder: Builder,
-    ) -> Result<JoinHandle<Result<(), Box<dyn Error + Send + Sync>>>, GenericError> {
+    ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
         Ok(
             builder
                 .name(format!("{name}-{index}"))
                 .spawn(move || {
                     barrier.wait();
-                    let mut r: Result<(), Box<dyn Error + Send + Sync>> = Ok(());
+                    let mut r: Result<(), anyhow::Error> = Ok(());
                     loop {
                         let (command, signal) = queue.dequeue();
                         if let Some(c) = command {
@@ -156,7 +156,7 @@ impl ThreadPool {
         }
     }
 
-    pub fn join(&mut self) -> Result<(), GenericError> {
+    pub fn join(&mut self) -> Result<(), anyhow::Error> {
         let mut join_errors = Vec::<String>::new();
         while self.threads.len() > 0 {
             let t = self.threads.pop().unwrap();
@@ -185,8 +185,7 @@ impl ThreadPool {
         if join_errors.is_empty() {
             Ok(())
         } else {
-            Err(GenericError::from(
-                format!("Errors occurred while joining threads in the {} pool: {}", self.name, join_errors.join(", ")))
+            Err(anyhow!("Errors occurred while joining threads in the {} pool: {}", self.name, join_errors.join(", "))
             )
         }
     }
@@ -226,7 +225,7 @@ mod tests {
     }
 
     impl Command for TestCommand {
-        fn execute(&self) -> Result<(), GenericError> {
+        fn execute(&self) -> Result<(), anyhow::Error> {
             self.execution_counter.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -310,8 +309,8 @@ mod tests {
     }
 
     impl Command for PanicTestCommand {
-        fn execute(&self) -> Result<(), GenericError> {
-            Err(GenericError::from("simulating error during command execution"))
+        fn execute(&self) -> Result<(), anyhow::Error> {
+            Err(anyhow!("simulating error during command execution"))
         }
     }
 
