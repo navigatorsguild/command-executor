@@ -1,8 +1,23 @@
 [package]
 name = "command-executor"
-version = "0.1.0"
+authors = ["Giora Kosoi"]
+license = "MIT OR Apache-2.0"
+description = "Command Executor thread pool"
+homepage = "https://www.navigatorsguild.io/"
+repository = "https://github.com/navigatorsguild/command-executor"
+readme = "README.md"
+keywords = ["threadpool", "thread", "pool", "parallel", "concurrency", "producer", "consumer", "mpmc"]
+categories = ["concurrency", ]
+version = "0.0.1-alpha"
 edition = "2021"
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 anyhow = "1.0.70"
 
+[dev-dependencies]
+hex = "0.4.3"
+sha1 = "0.10.5"
+reqwest = { version = "0.11", features = ["blocking", "json"] }

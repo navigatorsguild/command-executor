@@ -18,6 +18,13 @@ impl<S> QueueFlags<S> where S: Send + Sync + Clone {
     }
 }
 
+/// Blocking bounded queue
+///
+/// `E: Send + Sync` - the element type
+/// `S: Send + Sync + Clone` - the signal type. Signals can be used to provide out of band
+/// communication between threads
+/// This is a multiple producers / multiple consumers blocking bounded queue.
+/// Reference: [Producer-Consumer](https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem)
 pub struct BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
     flags: Arc<Mutex<QueueFlags<S>>>,
     empty: Arc<Condvar>,
@@ -27,21 +34,37 @@ pub struct BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
 }
 
 impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
+    /// Create a new queue with `size` capacity
+    /// ```
+    /// use command_executor::blocking_queue::BlockingQueue;
+    /// let q: BlockingQueue<i32, i32> = BlockingQueue::new(4);
+    /// ```
     pub fn new(size: usize) -> BlockingQueue<E, S> {
         let flags = Arc::new(Mutex::new(QueueFlags::new()));
         BlockingQueue::<E, S> {
             flags,
             empty: Arc::new(Condvar::new()),
             full: Arc::new(Condvar::new()),
-            elements: Arc::new(Mutex::new(VecDeque::new())),
+            elements: Arc::new(Mutex::new(VecDeque::with_capacity(size))),
             size,
         }
     }
 
+    /// The current length of the queue
+    /// ```
+    /// use command_executor::blocking_queue::BlockingQueue;
+    /// let q: BlockingQueue<i32, i32> = BlockingQueue::new(4);
+    /// q.enqueue(11);
+    /// assert_eq!(q.len(), 1);
+    /// ```
     pub fn len(&self) -> usize {
         self.elements.lock().unwrap().len()
     }
 
+    /// Wait until the queue is empty.
+    ///
+    /// Note that the empty state is temporary. This method is mostly useful when we know that no
+    /// elements are to be enqueued and we what an indication of completion.
     pub fn wait_empty(&self, timeout: Duration) -> bool {
         let flags_lock = &*self.flags;
         let empty = &*self.empty;
@@ -55,10 +78,12 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
                     if timeout_result.timed_out() {
                         break;
                     } else {
-                        let elapsed = start.elapsed().unwrap();
+                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
                         if elapsed < t {
                             t = t - elapsed;
                             start = SystemTime::now();
+                        } else {
+                            break;
                         }
                     }
                 }
@@ -68,10 +93,12 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         (*flags).empty
     }
 
+    /// Enqueue an element. When the queue is full will block until space available.
     pub fn enqueue(&self, element: E) {
         self.try_enqueue(element, Duration::MAX);
     }
 
+    /// Enqueue an element with timeout. When timeout is exceeded return the element to caller.
     pub fn try_enqueue(&self, element: E, timeout: Duration) -> Option<E> {
         let flags_lock = &*self.flags;
         let empty = &*self.empty;
@@ -88,10 +115,13 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
                         timed_out = true;
                         break;
                     } else {
-                        let elapsed = start.elapsed().unwrap();
+                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
                         if elapsed < t {
                             t = t - elapsed;
                             start = SystemTime::now();
+                        } else {
+                            timed_out = true;
+                            break;
                         }
                     }
                 }
@@ -114,10 +144,13 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         }
     }
 
+    /// Dequeue an element or a signal from the queue. When the queue is empty will block until an element or
+    /// a signal are available
     pub fn dequeue(&self) -> (Option<E>, Option<S>) {
         self.try_dequeue(Duration::MAX)
     }
 
+    /// Dequeue and element or a signal from the queue with timeout.
     pub fn try_dequeue(&self, timeout: Duration) -> (Option<E>, Option<S>) {
         let flags_lock = &*self.flags;
         let empty = &*self.empty;
@@ -134,10 +167,13 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
                         timed_out = true;
                         break;
                     } else {
-                        let elapsed = start.elapsed().unwrap();
+                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
                         if elapsed < t {
                             t = t - elapsed;
                             start = SystemTime::now();
+                        } else {
+                            timed_out = true;
+                            break;
                         }
                     }
                 }
@@ -161,17 +197,27 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         }
     }
 
+    /// Deliver a signal to Queue consumers.
+    ///
+    /// Note that the signal is visible to all consumers until cleared
     pub fn signal(&self, signal: S) {
         let empty = &*self.empty;
         let mut flags = self.flags.lock().unwrap();
         (*flags).signal = Some(signal);
         empty.notify_all();
     }
+
+    /// Clear the signal. Usually it is better if consumers ignore signals they already processed.
+    pub fn clear_signal(&self) {
+        let mut flags = self.flags.lock().unwrap();
+        (*flags).signal = None;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::thread::Builder;
+
     use super::*;
 
     #[test]
@@ -346,6 +392,7 @@ mod tests {
             let i2 = collector.iter().position(|e| *e == (2, i)).unwrap();
             collector.remove(i2);
         }
+        q.clear_signal();
         assert!(collector.is_empty());
     }
 }

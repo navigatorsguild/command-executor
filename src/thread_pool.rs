@@ -1,22 +1,22 @@
 use std::cell::RefCell;
-use std::thread::{Builder, JoinHandle, LocalKey};
 use std::sync::{Arc, Barrier, Mutex};
-use std::error::Error;
+use std::thread::{Builder, JoinHandle, LocalKey};
 use std::time::Duration;
+
 use anyhow::anyhow;
-use crate::executor::blocking_queue::BlockingQueue;
-use crate::executor::Command;
-use crate::executor::shutdown_mode::ShutdownMode;
-use crate::executor::signal::Signal;
-use crate::executor::signal::Signal::Shutdown;
+
+use crate::blocking_queue::BlockingQueue;
+use crate::command::Command;
+use crate::shutdown_mode::ShutdownMode;
+use crate::signal::Signal;
 
 struct RunInAllThreadsCommand {
-    f: Arc<Mutex<dyn FnMut() + Send + Sync>>,
+    f: Arc<dyn Fn() + Send + Sync>,
     b: Arc<Barrier>,
 }
 
 impl RunInAllThreadsCommand {
-    pub fn new(f: Arc<Mutex<dyn FnMut() + Send + Sync>>, b: Arc<Barrier>) -> RunInAllThreadsCommand {
+    pub fn new(f: Arc<dyn Fn() + Send + Sync>, b: Arc<Barrier>) -> RunInAllThreadsCommand {
         RunInAllThreadsCommand {
             f,
             b,
@@ -27,6 +27,30 @@ impl RunInAllThreadsCommand {
 impl Command for RunInAllThreadsCommand {
     fn execute(&self) -> Result<(), anyhow::Error> {
         {
+            (self.f)();
+        }
+        self.b.wait();
+        Ok(())
+    }
+}
+
+struct RunMutInAllThreadsCommand {
+    f: Arc<Mutex<dyn FnMut() + Send + Sync>>,
+    b: Arc<Barrier>,
+}
+
+impl RunMutInAllThreadsCommand {
+    pub fn new(f: Arc<Mutex<dyn FnMut() + Send + Sync>>, b: Arc<Barrier>) -> RunMutInAllThreadsCommand {
+        RunMutInAllThreadsCommand {
+            f,
+            b,
+        }
+    }
+}
+
+impl Command for RunMutInAllThreadsCommand {
+    fn execute(&self) -> Result<(), anyhow::Error> {
+        {
             let mut f = self.f.lock().unwrap();
             f();
         }
@@ -35,6 +59,23 @@ impl Command for RunInAllThreadsCommand {
     }
 }
 
+/// Execute tasks concurrently while maintaining bounds on memory consumption
+///
+/// To demonstrate the use case this implementation solves let's consider a program that reads
+/// lines from a file and writes those lines to another file after some processing. The processing
+/// itself is stateless and can be done in parallel on each line, but the reading and writing must
+/// be sequential. Using this implementation we will read the input in the main thread, submit it
+/// for concurrent processing to a processing thread pool and collect it for writing in a writing thread pool
+/// with a single thread. See ./examples/read_process_write_pipeline.rs. The submission to a thread
+/// pool is done through a blocking bounded queue, so if the processing thread pool or the writing
+/// thread pool cannot keep up, their blocking queues will fill up and create a backpressure that
+/// will pause the reading. So the resulting pipeline will stabilize on a throughput commanded by the
+/// slowest stage with the memory consumption determined by sizes of queues and number of
+/// threads in each thread pool.
+///
+/// For reference see [Command Pattern](https://en.wikipedia.org/wiki/Command_pattern) and
+/// [Producer-Consumer](https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem)
+///
 pub struct ThreadPool {
     name: String,
     tasks: usize,
@@ -46,19 +87,26 @@ pub struct ThreadPool {
 }
 
 impl ThreadPool {
-    pub(crate) fn new(name: String, tasks: usize, queue_size: usize, join_error_handler: fn(String, String), shutdown_mode: ShutdownMode) -> Result<ThreadPool, anyhow::Error> {
+    pub(crate) fn new(
+        name: String,
+        tasks: usize,
+        queue_size: usize,
+        join_error_handler: fn(String, String),
+        shutdown_mode: ShutdownMode,
+    ) -> Result<ThreadPool, anyhow::Error> {
         let start_barrier = Arc::new(Barrier::new(tasks + 1));
         let mut threads = Vec::<JoinHandle<Result<(), anyhow::Error>>>::new();
-        let queue = Arc::new(BlockingQueue::<Box<dyn Command + Send + Sync>, Signal>::new(queue_size));
+        let queue = Arc::new(
+            BlockingQueue::<Box<dyn Command + Send + Sync>, Signal>::new(queue_size)
+        );
         for i in 0..tasks {
             let barrier = start_barrier.clone();
-            let builder = std::thread::Builder::new();
             let t = Self::create_thread(
-                name.clone(),
+                &name,
                 i,
                 barrier,
                 queue.clone(),
-                builder);
+            );
             threads.push(t.unwrap());
         }
 
@@ -77,21 +125,21 @@ impl ThreadPool {
         )
     }
 
+    /// Set the number of concurrent threads in the thread pool
     pub fn tasks(&self) -> usize {
         self.tasks
     }
 
     fn create_thread(
-        name: String,
+        name: &String,
         index: usize,
         barrier: Arc<Barrier>,
         queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
-        builder: Builder,
     ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
-        Ok(
-            builder
-                .name(format!("{name}-{index}"))
-                .spawn(move || {
+        let builder = Builder::new();
+        Ok(builder
+            .name(format!("{name}-{index}"))
+            .spawn(move || {
                     barrier.wait();
                     let mut r: Result<(), anyhow::Error> = Ok(());
                     loop {
@@ -106,18 +154,42 @@ impl ThreadPool {
                         }
                         if let Some(s) = signal {
                             match s {
-                                Shutdown => {
+                                Signal::Shutdown => {
                                     break r;
                                 }
                             }
                         }
                     }
                 }
-                )?
+            )?
         )
     }
 
-    pub fn in_all_threads(&self, f: Arc<Mutex<dyn FnMut() + Send + Sync>>) {
+    /// Execute f in all threads.
+    ///
+    /// This function returns only after f had completed in all threads. Can be used to collect
+    /// data produced by the threads. See ./examples/fetch_thread_local.rs.
+    ///
+    /// Caveat: this is a [barrier](https://en.wikipedia.org/wiki/Barrier_%28computer_science%29)
+    /// function. So if one of the threads is busy with a long running task or is deadlocked, this
+    /// will halt all the threads until f can be executed.
+    pub fn in_all_threads_mut(&self, f: Arc<Mutex<dyn FnMut() + Send + Sync>>) {
+        let b = Arc::new(Barrier::new(self.tasks + 1));
+        for _i in 0..self.tasks {
+            self.submit(Box::new(RunMutInAllThreadsCommand::new(f.clone(), b.clone())));
+        }
+        b.wait();
+    }
+
+    /// Execute f in all threads.
+    ///
+    /// This function returns only after f had completed in all threads. Can be used to flush
+    /// data produced by the threads or simply execute work concurrently. See ./examples/flush_thread_local.rs.
+    ///
+    /// Caveat: this is a [barrier](https://en.wikipedia.org/wiki/Barrier_%28computer_science%29)
+    /// function. So if one of the threads is busy with a long running task or is deadlocked, this
+    /// will halt all the threads until f can be executed.
+    pub fn in_all_threads(&self, f: Arc<dyn Fn() + Send + Sync>) {
         let b = Arc::new(Barrier::new(self.tasks + 1));
         for _i in 0..self.tasks {
             self.submit(Box::new(RunInAllThreadsCommand::new(f.clone(), b.clone())));
@@ -125,9 +197,12 @@ impl ThreadPool {
         b.wait();
     }
 
+    /// Initializes the `local_key` to contain `val`.
+    ///
+    /// See ./examples/thread_local.rs
     pub fn set_thread_local<T>(&mut self, local_key: &'static LocalKey<RefCell<T>>, val: T)
         where T: Sync + Send + Clone {
-        self.in_all_threads(
+        self.in_all_threads_mut(
             Arc::new(
                 Mutex::new(
                     move || {
@@ -143,19 +218,25 @@ impl ThreadPool {
     }
 
 
+    /// Shut down the thread pool.
+    ///
+    /// This will shut down the thread pool according to configuration. When configured with
+    /// * [ShutdownMode::Immediate] - terminate each tread after completing the current task
+    /// * [ShutdownMode::CompletePending] - terminate after completing all pending tasks
     pub fn shutdown(&mut self) {
         self.expired = true;
         match self.shutdown_mode {
             ShutdownMode::Immediate => {
-                self.queue.signal(Shutdown);
+                self.queue.signal(Signal::Shutdown);
             }
             ShutdownMode::CompletePending => {
                 self.queue.wait_empty(Duration::MAX);
-                self.queue.signal(Shutdown);
+                self.queue.signal(Signal::Shutdown);
             }
         }
     }
 
+    /// Wait until all thread pool threads completed.
     pub fn join(&mut self) -> Result<(), anyhow::Error> {
         let mut join_errors = Vec::<String>::new();
         while self.threads.len() > 0 {
@@ -190,6 +271,7 @@ impl ThreadPool {
         }
     }
 
+    /// Submit command for execution
     pub fn submit(&self, command: Box<dyn Command + Send + Sync>) {
         if self.expired {
             panic!("the thread pool {} is expired", self.name)
@@ -197,6 +279,9 @@ impl ThreadPool {
         self.try_submit(command, Duration::MAX);
     }
 
+    /// Submit command for execution with timeout
+    ///
+    /// Returns the command on failure and None on success
     pub fn try_submit(&self, command: Box<dyn Command + Send + Sync>, timeout: Duration) -> Option<Box<dyn Command + Send + Sync>> {
         self.queue.try_enqueue(command, timeout)
     }
@@ -205,9 +290,11 @@ impl ThreadPool {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::executor::shutdown_mode::ShutdownMode;
-    use crate::executor::shutdown_mode::ShutdownMode::CompletePending;
-    use crate::executor::thread_pool_builder::ThreadPoolBuilder;
+
+    use crate::shutdown_mode::ShutdownMode;
+    use crate::shutdown_mode::ShutdownMode::CompletePending;
+    use crate::thread_pool_builder::ThreadPoolBuilder;
+
     use super::*;
 
     struct TestCommand {
@@ -272,7 +359,7 @@ mod tests {
         tp.join().expect("Failed to join thread pool");
         assert_eq!((), tp.join().unwrap());
         // accidental but usually works
-        // if fails safe to comment out the test_shutdown_when_empty tests superset of this test
+        // if fails safe to comment out the next two lines
         // assert!(execution_counter.fetch_or(0, Ordering::Relaxed) > 0);
         // assert!(execution_counter.fetch_or(0, Ordering::Relaxed) < 1024);
     }

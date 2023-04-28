@@ -2,13 +2,14 @@ use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{thread};
 use std::time::{Duration, SystemTime};
-use command_executor::executor::{Command, ShutdownMode};
-use command_executor::executor::ThreadPoolBuilder;
 use std::cell::{RefCell};
 use std::fs::{File, remove_file};
 use std::io::{BufRead, BufReader, Write};
 use std::ops::AddAssign;
 use std::path::PathBuf;
+use command_executor::command::Command;
+use command_executor::shutdown_mode::ShutdownMode;
+use command_executor::thread_pool_builder::ThreadPoolBuilder;
 
 struct TestCommand {
     _payload: i32,
@@ -101,15 +102,15 @@ fn run(tasks: usize, queue_size: usize, sleep_time: u64, command_count: usize) {
 #[test]
 fn test_concurrency() {
     let t1 = SystemTime::now();
-    run(1, 4, 1, 256);
+    run(1, 4, 10, 256);
     let e1 = t1.elapsed().unwrap().as_millis() as f64;
 
     let t2 = SystemTime::now();
-    run(2, 4, 1, 256);
+    run(2, 4, 10, 256);
     let e2 = t2.elapsed().unwrap().as_millis() as f64;
 
     let t4 = SystemTime::now();
-    run(4, 4, 1, 256);
+    run(4, 4, 10, 256);
     let e4 = t4.elapsed().unwrap().as_millis() as f64;
 
     assert!(e1 / e2 > 1.8_f64);
@@ -146,7 +147,7 @@ impl Command for Store {
 }
 
 #[test]
-fn test_in_all_threads() {
+fn test_in_all_threads_mut() {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
         .name("thread-local-file".to_string())
@@ -164,7 +165,7 @@ fn test_in_all_threads() {
         }
     }
 
-    tp.in_all_threads(
+    tp.in_all_threads_mut(
         Arc::new(
             Mutex::new(
                 move || {
@@ -198,4 +199,23 @@ fn test_in_all_threads() {
     }
     assert_eq!((), tp.join().unwrap());
     assert_eq!(total, 1024);
+}
+
+#[test]
+fn test_in_all_threads() {
+    let mut thread_pool_builder = ThreadPoolBuilder::new();
+    let mut tp = thread_pool_builder
+        .name("thread-local-file".to_string())
+        .tasks(4)
+        .queue_size(2048)
+        .shutdown_mode(ShutdownMode::CompletePending)
+        .build()
+        .unwrap();
+
+    tp.in_all_threads(
+        Arc::new(
+            move || {}
+        )
+    );
+    tp.shutdown();
 }

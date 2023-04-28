@@ -1,4 +1,4 @@
 #[derive(Clone, Debug)]
-pub enum Signal {
+pub(crate) enum Signal {
     Shutdown,
 }
