@@ -6,9 +6,9 @@ description = "Command Executor thread pool"
 homepage = "https://www.navigatorsguild.io/"
 repository = "https://github.com/navigatorsguild/command-executor"
 readme = "README.md"
-keywords = ["threadpool", "thread", "pool", "parallel", "concurrency", "producer", "consumer", "mpmc"]
+keywords = ["threadpool", "concurrency", "producer", "consumer", "mpmc"]
 categories = ["concurrency", ]
-version = "0.0.1-alpha"
+version = "0.0.2-alpha"
 edition = "2021"
 
 [badges]
