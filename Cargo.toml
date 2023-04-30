@@ -21,3 +21,10 @@ anyhow = "1.0.70"
 hex = "0.4.3"
 sha1 = "0.10.5"
 reqwest = { version = "0.11", features = ["blocking", "json"] }
+benchmark-rs = "0.0.6-alpha"
+simple_logger = "4.1.0"
+log = "0.4.17"
+rand = "0.8.5"
+
+
+
