@@ -1,19 +1,18 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-struct QueueFlags<S> where S: Send + Sync + Clone {
+struct QueueFlags {
     empty: bool,
     full: bool,
-    signal: Option<S>,
 }
 
-impl<S> QueueFlags<S> where S: Send + Sync + Clone {
-    fn new() -> QueueFlags<S> {
+impl QueueFlags {
+    fn new() -> QueueFlags {
         QueueFlags {
             empty: true,
             full: false,
-            signal: None,
         }
     }
 }
@@ -21,39 +20,37 @@ impl<S> QueueFlags<S> where S: Send + Sync + Clone {
 /// Blocking bounded queue
 ///
 /// `E: Send + Sync` - the element type
-/// `S: Send + Sync + Clone` - the signal type. Signals can be used to provide out of band
-/// communication between threads
 /// This is a multiple producers / multiple consumers blocking bounded queue.
 /// Reference: [Producer-Consumer](https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem)
-pub struct BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
-    flags: Arc<Mutex<QueueFlags<S>>>,
+pub struct BlockingQueue<E> where E: Send + Sync {
+    flags: Arc<Mutex<QueueFlags>>,
     empty: Arc<Condvar>,
     full: Arc<Condvar>,
     elements: Arc<Mutex<VecDeque<E>>>,
-    size: usize,
+    capacity: AtomicUsize,
 }
 
-impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
+impl<E> BlockingQueue<E> where E: Send + Sync {
     /// Create a new queue with `size` capacity
     /// ```
     /// use command_executor::blocking_queue::BlockingQueue;
-    /// let q: BlockingQueue<i32, i32> = BlockingQueue::new(4);
+    /// let q: BlockingQueue<i32> = BlockingQueue::new(4);
     /// ```
-    pub fn new(size: usize) -> BlockingQueue<E, S> {
+    pub fn new(capacity: usize) -> BlockingQueue<E> {
         let flags = Arc::new(Mutex::new(QueueFlags::new()));
-        BlockingQueue::<E, S> {
+        BlockingQueue::<E> {
             flags,
             empty: Arc::new(Condvar::new()),
             full: Arc::new(Condvar::new()),
-            elements: Arc::new(Mutex::new(VecDeque::with_capacity(size))),
-            size,
+            elements: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
+            capacity: AtomicUsize::new(capacity),
         }
     }
 
     /// The current length of the queue
     /// ```
     /// use command_executor::blocking_queue::BlockingQueue;
-    /// let q: BlockingQueue<i32, i32> = BlockingQueue::new(4);
+    /// let q: BlockingQueue<i32> = BlockingQueue::new(4);
     /// q.enqueue(11);
     /// assert_eq!(q.len(), 1);
     /// ```
@@ -61,10 +58,26 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         self.elements.lock().unwrap().len()
     }
 
+    /// The declared capacity of the queue. May be smaller than the actual capacity of the actual
+    /// storage
+    pub fn capacity(&self) -> usize {
+        self.capacity.load(Ordering::Relaxed)
+    }
+
+    /// Indication if the queue is empty in this point of time.
+    pub fn is_empty(&self) -> bool {
+        self.elements.lock().unwrap().is_empty()
+    }
+
+    /// Indication if the queue is full in this point of time.
+    pub fn is_full(&self) -> bool {
+        self.len() == self.capacity()
+    }
+
     /// Wait until the queue is empty.
     ///
     /// Note that the empty state is temporary. This method is mostly useful when we know that no
-    /// elements are to be enqueued and we what an indication of completion.
+    /// elements are to be enqueued and we want an indication of completion.
     pub fn wait_empty(&self, timeout: Duration) -> bool {
         let flags_lock = &*self.flags;
         let empty = &*self.empty;
@@ -89,7 +102,6 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
                 }
             }
         }
-
         (*flags).empty
     }
 
@@ -133,25 +145,24 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         } else {
             let mut elements = self.elements.lock().unwrap();
             elements.push_back(element);
-            if elements.len() == self.size {
+            (*flags).empty = false;
+            empty.notify_one();
+            if elements.len() == self.capacity() {
                 (*flags).full = true;
                 full.notify_all()
-            } else {
-                (*flags).empty = false;
-                empty.notify_one();
             }
             None
         }
     }
 
-    /// Dequeue an element or a signal from the queue. When the queue is empty will block until an element or
-    /// a signal are available
-    pub fn dequeue(&self) -> (Option<E>, Option<S>) {
+    /// Dequeue an element from the queue. When the queue is empty will block until an element is
+    /// available
+    pub fn dequeue(&self) -> Option<E> {
         self.try_dequeue(Duration::MAX)
     }
 
-    /// Dequeue and element or a signal from the queue with timeout.
-    pub fn try_dequeue(&self, timeout: Duration) -> (Option<E>, Option<S>) {
+    /// Dequeue and element from the queue with timeout.
+    pub fn try_dequeue(&self, timeout: Duration) -> Option<E> {
         let flags_lock = &*self.flags;
         let empty = &*self.empty;
         let full = &*self.full;
@@ -159,7 +170,7 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         let mut timed_out = false;
         let mut t = timeout;
         let mut start = SystemTime::now();
-        while (*flags).empty && flags.signal.is_none() {
+        while (*flags).empty {
             match empty.wait_timeout(flags, t).unwrap() {
                 (f, timeout_result) => {
                     flags = f;
@@ -181,36 +192,18 @@ impl<E, S> BlockingQueue<E, S> where E: Send + Sync, S: Send + Sync + Clone {
         }
 
         if timed_out {
-            (None, None)
+            None
         } else {
             let mut elements = self.elements.lock().unwrap();
             let element = elements.pop_front();
-
+            (*flags).full = false;
+            full.notify_one();
             if elements.len() == 0 {
                 (*flags).empty = true;
                 empty.notify_all();
-            } else {
-                (*flags).full = false;
-                full.notify_one();
             }
-            (element, flags.signal.clone())
+            element
         }
-    }
-
-    /// Deliver a signal to Queue consumers.
-    ///
-    /// Note that the signal is visible to all consumers until cleared
-    pub fn signal(&self, signal: S) {
-        let empty = &*self.empty;
-        let mut flags = self.flags.lock().unwrap();
-        (*flags).signal = Some(signal);
-        empty.notify_all();
-    }
-
-    /// Clear the signal. Usually it is better if consumers ignore signals they already processed.
-    pub fn clear_signal(&self) {
-        let mut flags = self.flags.lock().unwrap();
-        (*flags).signal = None;
     }
 }
 
@@ -222,17 +215,17 @@ mod tests {
 
     #[test]
     fn test_try_dequeue() {
-        let q = BlockingQueue::<i32, ()>::new(128);
+        let q = BlockingQueue::<i32>::new(128);
 
         let r = q.try_dequeue(Duration::from_millis(0));
-        assert_eq!(r, (None, None));
+        assert_eq!(r, None);
         let r = q.try_dequeue(Duration::from_millis(10));
-        assert_eq!(r, (None, None));
+        assert_eq!(r, None);
     }
 
     #[test]
     fn test_try_enqueue() {
-        let q = BlockingQueue::<i32, ()>::new(128);
+        let q = BlockingQueue::<i32>::new(128);
         for i in 0..128 {
             q.enqueue(i);
         }
@@ -245,19 +238,19 @@ mod tests {
 
     #[test]
     fn test_fifo() {
-        let q = BlockingQueue::<i32, ()>::new(128);
+        let q = BlockingQueue::<i32>::new(128);
         for i in 0..128 {
             q.enqueue(i);
         }
 
         for i in 0..128 {
-            assert_eq!(q.dequeue().0.unwrap(), i);
+            assert_eq!(q.dequeue().unwrap(), i);
         }
     }
 
     #[test]
     fn test_mpsc() {
-        let q = Arc::new(BlockingQueue::<(i32, i32), ()>::new(16));
+        let q = Arc::new(BlockingQueue::<(i32, i32)>::new(16));
         let qp1 = q.clone();
         let qp2 = q.clone();
         let qc1 = q.clone();
@@ -285,7 +278,7 @@ mod tests {
                 move || {
                     let mut collector = Vec::<(i32, i32)>::new();
                     loop {
-                        let (element, _signal) = qc1.dequeue();
+                        let element = qc1.dequeue();
                         collector.push(element.unwrap());
                         if collector.len() == 4096 {
                             break collector;
@@ -308,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_mpmc() {
-        let q = Arc::new(BlockingQueue::<(i32, i32), ()>::new(16));
+        let q = Arc::new(BlockingQueue::<(i32, i32)>::new(16));
         let qp1 = q.clone();
         let qp2 = q.clone();
         let qc1 = q.clone();
@@ -337,17 +330,14 @@ mod tests {
                 move || {
                     let mut collector = Vec::<(i32, i32)>::new();
                     loop {
-                        let (element, signal) = qc1.dequeue();
+                        let element = qc1.dequeue();
                         match element {
                             None => {}
+                            Some((-1, -1)) => {
+                                break collector;
+                            }
                             Some(e) => {
                                 collector.push(e);
-                            }
-                        }
-                        match signal {
-                            None => {}
-                            Some(_) => {
-                                break collector;
                             }
                         }
                     }
@@ -359,25 +349,25 @@ mod tests {
                 move || {
                     let mut collector = Vec::<(i32, i32)>::new();
                     loop {
-                        let (element, signal) = qc2.dequeue();
+                        let element = qc2.dequeue();
                         match element {
                             None => {}
+                            Some((-1, -1)) => {
+                                break collector;
+                            }
                             Some(e) => {
                                 collector.push(e);
-                            }
-                        }
-                        match signal {
-                            None => {}
-                            Some(_) => {
-                                break collector;
                             }
                         }
                     }
                 }
             );
+
         p1.unwrap().join().expect("failed to join producer");
         p2.unwrap().join().expect("failed to join producer");
-        q.signal(());
+
+        q.enqueue((-1, -1));
+        q.enqueue((-1, -1));
 
         let mut collector1 = c1.unwrap().join().expect("failed to join consumer");
         let mut collector2 = c2.unwrap().join().expect("failed to join consumer");
@@ -392,7 +382,6 @@ mod tests {
             let i2 = collector.iter().position(|e| *e == (2, i)).unwrap();
             collector.remove(i2);
         }
-        q.clear_signal();
         assert!(collector.is_empty());
     }
 }

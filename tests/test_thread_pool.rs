@@ -37,10 +37,10 @@ impl Command for TestCommand {
 fn test_thread_pool() {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
-        .name("t".to_string())
-        .tasks(4)
-        .queue_size(2048)
-        .shutdown_mode(ShutdownMode::CompletePending)
+        .with_name("t".to_string())
+        .with_tasks(4)
+        .with_queue_size(2048)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
         .build()
         .unwrap();
 
@@ -80,10 +80,10 @@ impl Command for SleepyCommand {
 fn run(tasks: usize, queue_size: usize, sleep_time: u64, command_count: usize) {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
-        .name("t".to_string())
-        .tasks(tasks)
-        .queue_size(queue_size)
-        .shutdown_mode(ShutdownMode::CompletePending)
+        .with_name("t".to_string())
+        .with_tasks(tasks)
+        .with_queue_size(queue_size)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
         .build()
         .unwrap();
 
@@ -150,10 +150,10 @@ impl Command for Store {
 fn test_in_all_threads_mut() {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
-        .name("thread-local-file".to_string())
-        .tasks(4)
-        .queue_size(2048)
-        .shutdown_mode(ShutdownMode::CompletePending)
+        .with_name("thread-local-file".to_string())
+        .with_tasks(4)
+        .with_queue_size(2048)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
         .build()
         .unwrap();
 
@@ -205,10 +205,10 @@ fn test_in_all_threads_mut() {
 fn test_in_all_threads() {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
-        .name("thread-local-file".to_string())
-        .tasks(4)
-        .queue_size(2048)
-        .shutdown_mode(ShutdownMode::CompletePending)
+        .with_name("thread-local-file".to_string())
+        .with_tasks(4)
+        .with_queue_size(2048)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
         .build()
         .unwrap();
 

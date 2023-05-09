@@ -3,10 +3,10 @@
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::io::Read;
 
 use anyhow::{anyhow, Context, Error};
 use hex;
@@ -96,10 +96,10 @@ fn create_thread_pool(name: &str, tasks: usize, queue_size: usize) -> Result<Arc
         Arc::new(
             RwLock::new(
                 ThreadPoolBuilder::new()
-                    .name_str(name)
-                    .tasks(tasks)
-                    .queue_size(queue_size)
-                    .shutdown_mode(ShutdownMode::CompletePending)
+                    .with_name_str(name)
+                    .with_tasks(tasks)
+                    .with_queue_size(queue_size)
+                    .with_shutdown_mode(ShutdownMode::CompletePending)
                     .build()?
             )
         )
@@ -127,18 +127,18 @@ fn fetch_file(url: &str, output: PathBuf) -> Result<(), Error> {
         println!("Downloading file: {} -> {:?}", url, output);
         let mut response = reqwest::blocking::get(url.clone())
             .with_context(|| anyhow!("Failed to download the file from {:?}", url)
-        )?;
+            )?;
         let mut body = Vec::new();
         response.read_to_end(&mut body)
-            .with_context(||anyhow!("Failed to read the file from {:?}", url)
-        )?;
+            .with_context(|| anyhow!("Failed to read the file from {:?}", url)
+            )?;
         let mut file = File::create(&output)
             .with_context(|| anyhow!("Failed to create the file: {:?}", output)
-        )?;
+            )?;
 
         file.write(body.as_slice())
             .with_context(|| anyhow!("failed to write content to {:?}", output)
-        )?;
+            )?;
     } else {
         println!("File exists at {:?}, skipping download", output);
     }
@@ -148,7 +148,7 @@ fn fetch_file(url: &str, output: PathBuf) -> Result<(), Error> {
 fn read(processing_stage: Arc<RwLock<ThreadPool>>) -> Result<(), anyhow::Error> {
     fetch_file(
         "https://github.com/danielmiessler/SecLists/raw/master/Passwords/Common-Credentials/10-million-password-list-top-1000000.txt",
-        PathBuf::from(SOURCE_FILE_PATH)
+        PathBuf::from(SOURCE_FILE_PATH),
     )?;
     let f = File::open(PathBuf::from(SOURCE_FILE_PATH))
         .with_context(|| anyhow!("{}", SOURCE_FILE_PATH))?;

@@ -10,11 +10,11 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Context, Error};
+
 use command_executor::command::Command;
 use command_executor::shutdown_mode::ShutdownMode;
 use command_executor::thread_pool::ThreadPool;
 use command_executor::thread_pool_builder::ThreadPoolBuilder;
-
 
 thread_local! {
     pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = RefCell::new(None);
@@ -114,9 +114,9 @@ fn create_thread_pool(name: &str, tasks: usize) -> Result<Arc<RwLock<ThreadPool>
         Arc::new(
             RwLock::new(
                 ThreadPoolBuilder::new()
-                    .name_str(name)
-                    .tasks(tasks)
-                    .shutdown_mode(ShutdownMode::CompletePending)
+                    .with_name_str(name)
+                    .with_tasks(tasks)
+                    .with_shutdown_mode(ShutdownMode::CompletePending)
                     .build()?
             )
         )

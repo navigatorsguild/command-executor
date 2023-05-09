@@ -124,10 +124,10 @@ fn create_thread_pool(name: &str, tasks: usize) -> Result<Arc<RwLock<ThreadPool>
         Arc::new(
             RwLock::new(
                 ThreadPoolBuilder::new()
-                    .name_str(name)
-                    .tasks(tasks)
-                    .queue_size(4)
-                    .shutdown_mode(ShutdownMode::CompletePending)
+                    .with_name_str(name)
+                    .with_tasks(tasks)
+                    .with_queue_size(4)
+                    .with_shutdown_mode(ShutdownMode::CompletePending)
                     .build()?
             )
         )

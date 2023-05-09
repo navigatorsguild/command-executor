@@ -1,6 +1,7 @@
+use std::cell::RefCell;
 use std::thread;
 use std::time::Duration;
-use std::cell::RefCell;
+
 use command_executor::command::Command;
 use command_executor::shutdown_mode::ShutdownMode;
 use command_executor::thread_pool_builder::ThreadPoolBuilder;
@@ -52,10 +53,10 @@ impl Command for ThreadLocalExampleCommand {
 fn main() -> Result<(), anyhow::Error> {
     let mut thread_pool_builder = ThreadPoolBuilder::new();
     let mut tp = thread_pool_builder
-        .name_str("example")
-        .tasks(4)
-        .queue_size(16)
-        .shutdown_mode(ShutdownMode::CompletePending)
+        .with_name_str("example")
+        .with_tasks(4)
+        .with_queue_size(16)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
         .build()?;
 
     tp.set_thread_local(&THREAD_LOCAL_CONFIG, Some(Config::default()));

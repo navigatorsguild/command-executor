@@ -1,14 +1,29 @@
 use std::cell::RefCell;
 use std::sync::{Arc, Barrier, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{Builder, JoinHandle, LocalKey};
 use std::time::Duration;
 
 use anyhow::anyhow;
 
-use crate::blocking_queue::BlockingQueue;
+use crate::blocking_queue_adapter::BlockingQueueAdapter;
 use crate::command::Command;
+use crate::queue_type::QueueType;
 use crate::shutdown_mode::ShutdownMode;
-use crate::signal::Signal;
+
+struct EmptyCommand {}
+
+impl EmptyCommand {
+    pub fn new() -> EmptyCommand {
+        EmptyCommand {}
+    }
+}
+
+impl Command for EmptyCommand {
+    fn execute(&self) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+}
 
 struct RunInAllThreadsCommand {
     f: Arc<dyn Fn() + Send + Sync>,
@@ -79,10 +94,11 @@ impl Command for RunMutInAllThreadsCommand {
 pub struct ThreadPool {
     name: String,
     tasks: usize,
-    queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
+    queue: Arc<BlockingQueueAdapter<Box<dyn Command + Send + Sync>>>,
     threads: Vec<JoinHandle<Result<(), anyhow::Error>>>,
     join_error_handler: fn(String, String),
     shutdown_mode: ShutdownMode,
+    stopped: Arc<AtomicBool>,
     expired: bool,
 }
 
@@ -90,15 +106,15 @@ impl ThreadPool {
     pub(crate) fn new(
         name: String,
         tasks: usize,
+        queue_type: QueueType,
         queue_size: usize,
         join_error_handler: fn(String, String),
         shutdown_mode: ShutdownMode,
     ) -> Result<ThreadPool, anyhow::Error> {
         let start_barrier = Arc::new(Barrier::new(tasks + 1));
+        let stopped = Arc::new(AtomicBool::new(false));
         let mut threads = Vec::<JoinHandle<Result<(), anyhow::Error>>>::new();
-        let queue = Arc::new(
-            BlockingQueue::<Box<dyn Command + Send + Sync>, Signal>::new(queue_size)
-        );
+        let queue = Arc::new(BlockingQueueAdapter::new(queue_type, queue_size));
         for i in 0..tasks {
             let barrier = start_barrier.clone();
             let t = Self::create_thread(
@@ -106,6 +122,7 @@ impl ThreadPool {
                 i,
                 barrier,
                 queue.clone(),
+                stopped.clone(),
             );
             threads.push(t.unwrap());
         }
@@ -120,12 +137,13 @@ impl ThreadPool {
                 threads,
                 join_error_handler,
                 shutdown_mode,
+                stopped: stopped.clone(),
                 expired: false,
             }
         )
     }
 
-    /// Set the number of concurrent threads in the thread pool
+    /// Get the number of concurrent threads in the thread pool
     pub fn tasks(&self) -> usize {
         self.tasks
     }
@@ -134,33 +152,28 @@ impl ThreadPool {
         name: &String,
         index: usize,
         barrier: Arc<Barrier>,
-        queue: Arc<BlockingQueue<Box<dyn Command + Send + Sync>, Signal>>,
+        queue: Arc<BlockingQueueAdapter<Box<dyn Command + Send + Sync>>>,
+        stopped: Arc<AtomicBool>,
     ) -> Result<JoinHandle<Result<(), anyhow::Error>>, anyhow::Error> {
         let builder = Builder::new();
         Ok(builder
             .name(format!("{name}-{index}"))
             .spawn(move || {
-                    barrier.wait();
-                    let mut r: Result<(), anyhow::Error> = Ok(());
-                    loop {
-                        let (command, signal) = queue.dequeue();
-                        if let Some(c) = command {
-                            match c.execute() {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    r = Err(e);
-                                }
-                            }
-                        }
-                        if let Some(s) = signal {
-                            match s {
-                                Signal::Shutdown => {
-                                    break r;
-                                }
+                barrier.wait();
+                let mut r: Result<(), anyhow::Error> = Ok(());
+                while !stopped.load(Ordering::Acquire) {
+                    let command = queue.dequeue();
+                    if let Some(c) = command {
+                        match c.execute() {
+                            Ok(_) => {}
+                            Err(e) => {
+                                r = Err(e);
                             }
                         }
                     }
                 }
+                r
+            }
             )?
         )
     }
@@ -217,7 +230,6 @@ impl ThreadPool {
         );
     }
 
-
     /// Shut down the thread pool.
     ///
     /// This will shut down the thread pool according to configuration. When configured with
@@ -227,12 +239,15 @@ impl ThreadPool {
         self.expired = true;
         match self.shutdown_mode {
             ShutdownMode::Immediate => {
-                self.queue.signal(Signal::Shutdown);
+                self.stopped.store(true, Ordering::Relaxed);
             }
             ShutdownMode::CompletePending => {
                 self.queue.wait_empty(Duration::MAX);
-                self.queue.signal(Signal::Shutdown);
+                self.stopped.store(true, Ordering::Relaxed);
             }
+        }
+        for _i in 0..self.tasks {
+            self.unchecked_submit(Box::new(EmptyCommand::new()));
         }
     }
 
@@ -273,16 +288,21 @@ impl ThreadPool {
 
     /// Submit command for execution
     pub fn submit(&self, command: Box<dyn Command + Send + Sync>) {
-        if self.expired {
-            panic!("the thread pool {} is expired", self.name)
-        }
         self.try_submit(command, Duration::MAX);
+    }
+
+    pub fn unchecked_submit(&self, command: Box<dyn Command + Send + Sync>) {
+        self.queue.enqueue(command);
     }
 
     /// Submit command for execution with timeout
     ///
     /// Returns the command on failure and None on success
     pub fn try_submit(&self, command: Box<dyn Command + Send + Sync>, timeout: Duration) -> Option<Box<dyn Command + Send + Sync>> {
+        if self.expired {
+            // TODO
+            panic!("the thread pool {} is shut down", self.name)
+        }
         self.queue.try_enqueue(command, timeout)
     }
 }
@@ -322,9 +342,9 @@ mod tests {
     fn test_create() {
         let mut thread_pool_builder = ThreadPoolBuilder::new();
         let tp_result = thread_pool_builder
-            .name("t".to_string())
-            .tasks(4)
-            .queue_size(8)
+            .with_name("t".to_string())
+            .with_tasks(4)
+            .with_queue_size(8)
             .build();
 
         match tp_result {
@@ -343,9 +363,9 @@ mod tests {
     fn test_submit() {
         let mut thread_pool_builder = ThreadPoolBuilder::new();
         let mut tp = thread_pool_builder
-            .name("t".to_string())
-            .tasks(4)
-            .queue_size(2048)
+            .with_name("t".to_string())
+            .with_tasks(4)
+            .with_queue_size(2048)
             .build()
             .unwrap();
 
@@ -368,10 +388,10 @@ mod tests {
     fn test_shutdown_complete_pending() {
         let mut thread_pool_builder = ThreadPoolBuilder::new();
         let mut tp = thread_pool_builder
-            .name("t".to_string())
-            .tasks(4)
-            .queue_size(2048)
-            .shutdown_mode(ShutdownMode::CompletePending)
+            .with_name("t".to_string())
+            .with_tasks(4)
+            .with_queue_size(2048)
+            .with_shutdown_mode(ShutdownMode::CompletePending)
             .build()
             .unwrap();
 
@@ -405,11 +425,11 @@ mod tests {
     fn test_join_error_handler() {
         let mut thread_pool_builder = ThreadPoolBuilder::new();
         let mut tp = thread_pool_builder
-            .name("t".to_string())
-            .tasks(4)
-            .shutdown_mode(CompletePending)
-            .queue_size(8)
-            .join_error_handler(
+            .with_name("t".to_string())
+            .with_tasks(4)
+            .with_shutdown_mode(CompletePending)
+            .with_queue_size(8)
+            .with_join_error_handler(
                 |name, message| {
                     println!("Thread {name} ended with and error {message}")
                 }
@@ -431,10 +451,10 @@ mod tests {
     fn test_use_after_join() {
         let mut thread_pool_builder = ThreadPoolBuilder::new();
         let mut tp = thread_pool_builder
-            .name("t".to_string())
-            .tasks(4)
-            .queue_size(2048)
-            .shutdown_mode(ShutdownMode::CompletePending)
+            .with_name("t".to_string())
+            .with_tasks(4)
+            .with_queue_size(2048)
+            .with_shutdown_mode(ShutdownMode::CompletePending)
             .build()
             .unwrap();
 
