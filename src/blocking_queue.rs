@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Condvar, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::time::{Duration, SystemTime};
 
 struct QueueFlags {
@@ -23,11 +22,11 @@ impl QueueFlags {
 /// This is a multiple producers / multiple consumers blocking bounded queue.
 /// Reference: [Producer-Consumer](https://en.wikipedia.org/wiki/Producer%E2%80%93consumer_problem)
 pub struct BlockingQueue<E> where E: Send + Sync {
-    flags: Arc<Mutex<QueueFlags>>,
-    empty: Arc<Condvar>,
-    full: Arc<Condvar>,
-    elements: Arc<Mutex<VecDeque<E>>>,
-    capacity: AtomicUsize,
+    flags: Mutex<QueueFlags>,
+    empty: Condvar,
+    full: Condvar,
+    elements: Mutex<VecDeque<E>>,
+    capacity: usize,
 }
 
 impl<E> BlockingQueue<E> where E: Send + Sync {
@@ -37,13 +36,13 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
     /// let q: BlockingQueue<i32> = BlockingQueue::new(4);
     /// ```
     pub fn new(capacity: usize) -> BlockingQueue<E> {
-        let flags = Arc::new(Mutex::new(QueueFlags::new()));
+        let flags = Mutex::new(QueueFlags::new());
         BlockingQueue::<E> {
             flags,
-            empty: Arc::new(Condvar::new()),
-            full: Arc::new(Condvar::new()),
-            elements: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
-            capacity: AtomicUsize::new(capacity),
+            empty: Condvar::new(),
+            full: Condvar::new(),
+            elements: Mutex::new(VecDeque::with_capacity(capacity)),
+            capacity,
         }
     }
 
@@ -61,7 +60,7 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
     /// The declared capacity of the queue. May be smaller than the actual capacity of the actual
     /// storage
     pub fn capacity(&self) -> usize {
-        self.capacity.load(Ordering::Relaxed)
+        self.capacity
     }
 
     /// Indication if the queue is empty in this point of time.
@@ -79,8 +78,8 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
     /// Note that the empty state is temporary. This method is mostly useful when we know that no
     /// elements are to be enqueued and we want an indication of completion.
     pub fn wait_empty(&self, timeout: Duration) -> bool {
-        let flags_lock = &*self.flags;
-        let empty = &*self.empty;
+        let flags_lock = &self.flags;
+        let empty = &self.empty;
         let mut flags = flags_lock.lock().unwrap();
         let mut t = timeout;
         let mut start = SystemTime::now();
@@ -112,9 +111,9 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
 
     /// Enqueue an element with timeout. When timeout is exceeded return the element to caller.
     pub fn try_enqueue(&self, element: E, timeout: Duration) -> Option<E> {
-        let flags_lock = &*self.flags;
-        let empty = &*self.empty;
-        let full = &*self.full;
+        let flags_lock = &self.flags;
+        let empty = &self.empty;
+        let full = &self.full;
         let mut flags = flags_lock.lock().unwrap();
         let mut timed_out = false;
         let mut t = timeout;
@@ -163,9 +162,9 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
 
     /// Dequeue and element from the queue with timeout.
     pub fn try_dequeue(&self, timeout: Duration) -> Option<E> {
-        let flags_lock = &*self.flags;
-        let empty = &*self.empty;
-        let full = &*self.full;
+        let flags_lock = &self.flags;
+        let empty = &self.empty;
+        let full = &self.full;
         let mut flags = flags_lock.lock().unwrap();
         let mut timed_out = false;
         let mut t = timeout;
@@ -209,6 +208,7 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
     use std::thread::Builder;
 
     use super::*;

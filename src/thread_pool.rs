@@ -161,7 +161,7 @@ impl ThreadPool {
             .spawn(move || {
                 barrier.wait();
                 let mut r: Result<(), anyhow::Error> = Ok(());
-                while !stopped.load(Ordering::Acquire) {
+                while !stopped.load(Ordering::SeqCst) {
                     let command = queue.dequeue();
                     if let Some(c) = command {
                         match c.execute() {
@@ -239,11 +239,11 @@ impl ThreadPool {
         self.expired = true;
         match self.shutdown_mode {
             ShutdownMode::Immediate => {
-                self.stopped.store(true, Ordering::Relaxed);
+                self.stopped.store(true, Ordering::SeqCst);
             }
             ShutdownMode::CompletePending => {
                 self.queue.wait_empty(Duration::MAX);
-                self.stopped.store(true, Ordering::Relaxed);
+                self.stopped.store(true, Ordering::SeqCst);
             }
         }
         for _i in 0..self.tasks {
@@ -299,10 +299,7 @@ impl ThreadPool {
     ///
     /// Returns the command on failure and None on success
     pub fn try_submit(&self, command: Box<dyn Command + Send + Sync>, timeout: Duration) -> Option<Box<dyn Command + Send + Sync>> {
-        if self.expired {
-            // TODO
-            panic!("the thread pool {} is shut down", self.name)
-        }
+        assert!(!self.expired);
         self.queue.try_enqueue(command, timeout)
     }
 }
