@@ -68,10 +68,10 @@ impl Command for ExampleCommand {
 pub fn main() -> Result<(), anyhow::Error> {
    let mut thread_pool_builder = ThreadPoolBuilder::new();
    let mut tp = thread_pool_builder
-       .name("example".to_string())
-       .tasks(4)
-       .queue_size(16)
-       .shutdown_mode(ShutdownMode::CompletePending)
+       .with_name("example".to_string())
+       .with_tasks(4)
+       .with_queue_size(16)
+       .with_shutdown_mode(ShutdownMode::CompletePending)
        .build()
        .unwrap();
 
@@ -140,10 +140,10 @@ impl Command for ThreadLocalExampleCommand {
 fn main() -> Result<(), anyhow::Error> {
    let mut thread_pool_builder = ThreadPoolBuilder::new();
    let mut tp = thread_pool_builder
-       .name("example".to_string())
-       .tasks(4)
-       .queue_size(16)
-       .shutdown_mode(ShutdownMode::CompletePending)
+       .with_name("example".to_string())
+       .with_tasks(4)
+       .with_queue_size(16)
+       .with_shutdown_mode(ShutdownMode::CompletePending)
        .build()
        .unwrap();
 
