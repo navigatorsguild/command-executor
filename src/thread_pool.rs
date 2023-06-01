@@ -213,19 +213,17 @@ impl ThreadPool {
     /// Initializes the `local_key` to contain `val`.
     ///
     /// See ./examples/thread_local.rs
-    pub fn set_thread_local<T>(&mut self, local_key: &'static LocalKey<RefCell<T>>, val: T)
+    pub fn set_thread_local<T>(&self, local_key: &'static LocalKey<RefCell<T>>, val: T)
         where T: Sync + Send + Clone {
-        self.in_all_threads_mut(
+        self.in_all_threads(
             Arc::new(
-                Mutex::new(
-                    move || {
-                        local_key.with(
-                            |value| {
-                                value.replace(val.clone())
-                            }
-                        );
-                    }
-                )
+                move || {
+                    local_key.with(
+                        |value| {
+                            value.replace(val.clone())
+                        }
+                    );
+                }
             )
         );
     }
