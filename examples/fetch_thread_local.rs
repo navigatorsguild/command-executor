@@ -88,7 +88,7 @@ fn create_thread_pool(name: &str, tasks: usize) -> Result<Arc<RwLock<ThreadPool>
 }
 
 fn set_next(thread_pool: Arc<RwLock<ThreadPool>>, next: Arc<RwLock<ThreadPool>>) -> Result<(), anyhow::Error> {
-    let mut tp = thread_pool
+    let tp = thread_pool
         .write()
         .map_err(|e| anyhow!("failed to lock tread pool: {e}"))?;
     tp.set_thread_local(&NEXT_THREAD_POOL, Some(next.clone()));

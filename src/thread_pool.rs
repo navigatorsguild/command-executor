@@ -328,7 +328,7 @@ mod tests {
 
     impl Command for TestCommand {
         fn execute(&self) -> Result<(), anyhow::Error> {
-            self.execution_counter.fetch_add(1, Ordering::Relaxed);
+            self.execution_counter.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
     }
@@ -375,8 +375,8 @@ mod tests {
         assert_eq!((), tp.join().unwrap());
         // accidental but usually works
         // if fails safe to comment out the next two lines
-        // assert!(execution_counter.fetch_or(0, Ordering::Relaxed) > 0);
-        // assert!(execution_counter.fetch_or(0, Ordering::Relaxed) < 1024);
+        // assert!(execution_counter.fetch_or(0, Ordering::SeqCst) > 0);
+        // assert!(execution_counter.fetch_or(0, Ordering::SeqCst) < 1024);
     }
 
     #[test]
@@ -399,7 +399,7 @@ mod tests {
         tp.shutdown();
         tp.join().expect("Failed to join thread pool");
         assert_eq!((), tp.join().unwrap());
-        assert_eq!(execution_counter.fetch_or(0, Ordering::Relaxed), 1024);
+        assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), 1024);
     }
 
     struct PanicTestCommand {}

@@ -27,7 +27,7 @@ impl TestCommand {
 
 impl Command for TestCommand {
     fn execute(&self) -> Result<(), anyhow::Error> {
-        self.execution_counter.fetch_add(1, Ordering::Relaxed);
+        self.execution_counter.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -52,7 +52,7 @@ fn test_thread_pool() {
 
     tp.shutdown();
     assert_eq!((), tp.join().unwrap());
-    assert_eq!(execution_counter.fetch_or(0, Ordering::Relaxed), 1024);
+    assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), 1024);
 }
 
 struct SleepyCommand {
@@ -72,7 +72,7 @@ impl SleepyCommand {
 impl Command for SleepyCommand {
     fn execute(&self) -> Result<(), anyhow::Error> {
         thread::sleep(Duration::from_millis(self.sleep_time));
-        self.execution_counter.fetch_add(1, Ordering::Relaxed);
+        self.execution_counter.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -95,7 +95,7 @@ fn run(tasks: usize, queue_size: usize, sleep_time: u64, command_count: usize) {
 
     tp.shutdown();
     assert_eq!((), tp.join().unwrap());
-    assert_eq!(execution_counter.fetch_or(0, Ordering::Relaxed), command_count);
+    assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), command_count);
 }
 
 
