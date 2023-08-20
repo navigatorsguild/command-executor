@@ -109,3 +109,9 @@ impl ThreadPoolBuilder {
         )
     }
 }
+
+impl Default for ThreadPoolBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}

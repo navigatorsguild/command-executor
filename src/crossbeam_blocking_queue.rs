@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 use crossbeam::queue::ArrayQueue;
 
@@ -33,12 +33,12 @@ impl<E> CrossbeamBlockingQueue<E> where E: Send + Sync {
     pub fn wait_empty(&self, timeout: Duration) -> bool {
         let backoff = crossbeam::utils::Backoff::new();
         let mut t = timeout;
-        let mut start = SystemTime::now();
+        let mut start = Instant::now();
         while !self.elements.is_empty() {
-            let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
+            let elapsed = start.elapsed();
             if elapsed < t {
-                t = t - elapsed;
-                start = SystemTime::now();
+                t -= elapsed;
+                start = Instant::now();
             } else {
                 break;
             }
@@ -54,7 +54,7 @@ impl<E> CrossbeamBlockingQueue<E> where E: Send + Sync {
     pub fn try_enqueue(&self, element: E, timeout: Duration) -> Option<E> {
         let backoff = crossbeam::utils::Backoff::new();
         let mut t = timeout;
-        let mut start = SystemTime::now();
+        let mut start = Instant::now();
         let mut e = element;
         loop {
             let result = self.elements.push(e);
@@ -64,10 +64,10 @@ impl<E> CrossbeamBlockingQueue<E> where E: Send + Sync {
                 }
                 Err(element) => {
                     e = element;
-                    let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
+                    let elapsed = start.elapsed();
                     if elapsed < t {
-                        t = t - elapsed;
-                        start = SystemTime::now();
+                        t -= elapsed;
+                        start = Instant::now();
                     } else {
                         break Some(e);
                     }
@@ -84,14 +84,14 @@ impl<E> CrossbeamBlockingQueue<E> where E: Send + Sync {
     pub fn try_dequeue(&self, timeout: Duration) -> Option<E> {
         let backoff = crossbeam::utils::Backoff::new();
         let mut t = timeout;
-        let mut start = SystemTime::now();
+        let mut start = Instant::now();
         loop {
             let element = self.elements.pop();
             if element.is_none() {
-                let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
+                let elapsed = start.elapsed();
                 if elapsed < t {
-                    t = t - elapsed;
-                    start = SystemTime::now();
+                    t -= elapsed;
+                    start = Instant::now();
                 } else {
                     break None;
                 }

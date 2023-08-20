@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::sync::{Condvar, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 struct QueueFlags {
     empty: bool,
@@ -36,9 +36,8 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
     /// let q: BlockingQueue<i32> = BlockingQueue::new(4);
     /// ```
     pub fn new(capacity: usize) -> BlockingQueue<E> {
-        let flags = Mutex::new(QueueFlags::new());
         BlockingQueue::<E> {
-            flags,
+            flags: Mutex::new(QueueFlags::new()),
             empty: Condvar::new(),
             full: Condvar::new(),
             elements: Mutex::new(VecDeque::with_capacity(capacity)),
@@ -46,7 +45,9 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         }
     }
 
-    /// The current length of the queue
+    /// The current length of the queue. Note that the reported length is correct at the time
+    /// of checking, the actual length may change between the call and the access to the result
+    /// value. Should be used for diagnostic and monitoring only.
     /// ```
     /// use command_executor::blocking_queue::BlockingQueue;
     /// let q: BlockingQueue<i32> = BlockingQueue::new(4);
@@ -63,12 +64,14 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         self.capacity
     }
 
-    /// Indication if the queue is empty in this point of time.
+    /// Indication if the queue is empty in this point of time. Should be used for diagnostic
+    /// and monitoring only.
     pub fn is_empty(&self) -> bool {
         self.elements.lock().unwrap().is_empty()
     }
 
-    /// Indication if the queue is full in this point of time.
+    /// Indication if the queue is full in this point of time. Should be used for diagnostic
+    /// and monitoring only.
     pub fn is_full(&self) -> bool {
         self.len() == self.capacity()
     }
@@ -82,26 +85,25 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         let empty = &self.empty;
         let mut flags = flags_lock.lock().unwrap();
         let mut t = timeout;
-        let mut start = SystemTime::now();
-        while !(*flags).empty {
-            match empty.wait_timeout(flags, t).unwrap() {
-                (f, timeout_result) => {
-                    flags = f;
-                    if timeout_result.timed_out() {
-                        break;
+        let mut start = Instant::now();
+        while !flags.empty {
+            let (f, timeout_result) = empty.wait_timeout(flags, t).unwrap();
+            {
+                flags = f;
+                if timeout_result.timed_out() {
+                    break;
+                } else {
+                    let elapsed = start.elapsed();
+                    if elapsed < t {
+                        t -= elapsed;
+                        start = Instant::now();
                     } else {
-                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
-                        if elapsed < t {
-                            t = t - elapsed;
-                            start = SystemTime::now();
-                        } else {
-                            break;
-                        }
+                        break;
                     }
                 }
             }
         }
-        (*flags).empty
+        flags.empty
     }
 
     /// Enqueue an element. When the queue is full will block until space available.
@@ -117,23 +119,22 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         let mut flags = flags_lock.lock().unwrap();
         let mut timed_out = false;
         let mut t = timeout;
-        let mut start = SystemTime::now();
-        while (*flags).full {
-            match full.wait_timeout(flags, t).unwrap() {
-                (f, timeout_result) => {
-                    flags = f;
-                    if timeout_result.timed_out() {
+        let mut start = Instant::now();
+        while flags.full {
+            let (f, timeout_result) = full.wait_timeout(flags, t).unwrap();
+            {
+                flags = f;
+                if timeout_result.timed_out() {
+                    timed_out = true;
+                    break;
+                } else {
+                    let elapsed = start.elapsed();
+                    if elapsed < t {
+                        t -= elapsed;
+                        start = Instant::now();
+                    } else {
                         timed_out = true;
                         break;
-                    } else {
-                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
-                        if elapsed < t {
-                            t = t - elapsed;
-                            start = SystemTime::now();
-                        } else {
-                            timed_out = true;
-                            break;
-                        }
                     }
                 }
             }
@@ -144,10 +145,10 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         } else {
             let mut elements = self.elements.lock().unwrap();
             elements.push_back(element);
-            (*flags).empty = false;
+            flags.empty = false;
             empty.notify_one();
             if elements.len() == self.capacity() {
-                (*flags).full = true;
+                flags.full = true;
                 full.notify_all()
             }
             None
@@ -168,23 +169,22 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         let mut flags = flags_lock.lock().unwrap();
         let mut timed_out = false;
         let mut t = timeout;
-        let mut start = SystemTime::now();
-        while (*flags).empty {
-            match empty.wait_timeout(flags, t).unwrap() {
-                (f, timeout_result) => {
-                    flags = f;
-                    if timeout_result.timed_out() {
+        let mut start = Instant::now();
+        while flags.empty {
+            let (f, timeout_result) = empty.wait_timeout(flags, t).unwrap();
+            {
+                flags = f;
+                if timeout_result.timed_out() {
+                    timed_out = true;
+                    break;
+                } else {
+                    let elapsed = start.elapsed();
+                    if elapsed < t {
+                        t -= elapsed;
+                        start = Instant::now();
+                    } else {
                         timed_out = true;
                         break;
-                    } else {
-                        let elapsed = start.elapsed().unwrap_or(Duration::from_nanos(1));
-                        if elapsed < t {
-                            t = t - elapsed;
-                            start = SystemTime::now();
-                        } else {
-                            timed_out = true;
-                            break;
-                        }
                     }
                 }
             }
@@ -195,10 +195,10 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
         } else {
             let mut elements = self.elements.lock().unwrap();
             let element = elements.pop_front();
-            (*flags).full = false;
+            flags.full = false;
             full.notify_one();
             if elements.len() == 0 {
-                (*flags).empty = true;
+                flags.empty = true;
                 empty.notify_all();
             }
             element

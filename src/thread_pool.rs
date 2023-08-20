@@ -252,8 +252,7 @@ impl ThreadPool {
     /// Wait until all thread pool threads completed.
     pub fn join(&mut self) -> Result<(), anyhow::Error> {
         let mut join_errors = Vec::<String>::new();
-        while self.threads.len() > 0 {
-            let t = self.threads.pop().unwrap();
+        while let Some(t) = self.threads.pop() {
             let name = t.thread().name().unwrap_or("unnamed").to_string();
             match t.join() {
                 Ok(r) => {
