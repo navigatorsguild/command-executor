@@ -343,12 +343,11 @@ mod tests {
 
         match tp_result {
             Ok(mut tp) => {
-                assert!(true);
                 tp.shutdown();
-                assert_eq!((), tp.join().unwrap());
+                tp.join().unwrap();
             }
             Err(_) => {
-                assert!(false);
+                panic!("Failed to build thread pool");
             }
         }
     }
@@ -371,7 +370,7 @@ mod tests {
 
         tp.shutdown();
         tp.join().expect("Failed to join thread pool");
-        assert_eq!((), tp.join().unwrap());
+        tp.join().unwrap();
         // accidental but usually works
         // if fails safe to comment out the next two lines
         // assert!(execution_counter.fetch_or(0, Ordering::SeqCst) > 0);
@@ -397,7 +396,7 @@ mod tests {
 
         tp.shutdown();
         tp.join().expect("Failed to join thread pool");
-        assert_eq!((), tp.join().unwrap());
+        tp.join().unwrap();
         assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), 1024);
     }
 

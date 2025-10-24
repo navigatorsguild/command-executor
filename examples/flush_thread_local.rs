@@ -19,9 +19,9 @@ use command_executor::thread_pool::ThreadPool;
 use command_executor::thread_pool_builder::ThreadPoolBuilder;
 
 thread_local! {
-    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = RefCell::new(None);
+    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = const { RefCell::new(None) };
     pub static INTERMEDIATE_RESULT: RefCell<HashSet<i32>> = RefCell::new(HashSet::new());
-    pub static RESULT_FILE: RefCell<Option<File>> = RefCell::new(None);
+    pub static RESULT_FILE: RefCell<Option<File>> = const { RefCell::new(None) };
 }
 
 static RESULT_FILE_PATH: &str = "./target/pipeline-example-result";

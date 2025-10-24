@@ -197,7 +197,7 @@ impl<E> BlockingQueue<E> where E: Send + Sync {
             let element = elements.pop_front();
             flags.full = false;
             full.notify_one();
-            if elements.len() == 0 {
+            if elements.is_empty() {
                 flags.empty = true;
                 empty.notify_all();
             }

@@ -20,7 +20,7 @@ impl Default for Config {
 }
 
 thread_local! {
-    static THREAD_LOCAL_CONFIG: RefCell<Option<Config>> = RefCell::new(None);
+    static THREAD_LOCAL_CONFIG: RefCell<Option<Config>> = const { RefCell::new(None) };
 }
 
 struct ThreadLocalExampleCommand {

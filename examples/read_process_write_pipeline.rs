@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Context, Error};
-use hex;
 use sha1::{Digest, Sha1};
 
 use command_executor::command::Command;
@@ -18,8 +17,8 @@ use command_executor::thread_pool::ThreadPool;
 use command_executor::thread_pool_builder::ThreadPoolBuilder;
 
 thread_local! {
-    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = RefCell::new(None);
-    pub static RESULT_FILE: RefCell<Option<File>> = RefCell::new(None);
+    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = const { RefCell::new(None) };
+    pub static RESULT_FILE: RefCell<Option<File>> = const { RefCell::new(None) };
 }
 
 static RESULT_FILE_PATH: &str = "./target/read-process-write-example-result";
@@ -125,7 +124,7 @@ fn shutdown(thread_pool: Arc<RwLock<ThreadPool>>) -> Result<(), anyhow::Error> {
 fn fetch_file(url: &str, output: PathBuf) -> Result<(), Error> {
     if !output.exists() {
         println!("Downloading file: {} -> {:?}", url, output);
-        let mut response = reqwest::blocking::get(url.clone())
+        let mut response = reqwest::blocking::get(url)
             .with_context(|| anyhow!("Failed to download the file from {:?}", url)
             )?;
         let mut body = Vec::new();

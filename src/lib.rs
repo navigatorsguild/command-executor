@@ -6,9 +6,9 @@
 //! * control of memory consumption - achieved through use of a bounded blocking queue
 //! * indication of workload completion - achieved through a shutdown "after all work is complete"
 //! * maintain a predictable models of the execution - commands are submitted for execution in FIFO order with
-//! backpressure until all work is done. Note that the actual order of execution is depending on
-//! the system scheduler, however, you can assume that the `n + 1` command will be dequeued by an
-//! executing thread after 'n' command was dequeued.
+//!   backpressure until all work is done. Note that the actual order of execution is depending on
+//!   the system scheduler, however, you can assume that the `n + 1` command will be dequeued by an
+//!   executing thread after 'n' command was dequeued.
 //!
 //! # Use cases
 //! The use case for this approach to parallelism is when handling very large data sets that cannot fit
