@@ -51,7 +51,7 @@ fn test_thread_pool() {
     }
 
     tp.shutdown();
-    assert_eq!((), tp.join().unwrap());
+    tp.join().unwrap();
     assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), 1024);
 }
 
@@ -94,7 +94,7 @@ fn run(tasks: usize, queue_size: usize, sleep_time: u64, command_count: usize) {
     }
 
     tp.shutdown();
-    assert_eq!((), tp.join().unwrap());
+    tp.join().unwrap();
     assert_eq!(execution_counter.fetch_or(0, Ordering::SeqCst), command_count);
 }
 
@@ -118,7 +118,7 @@ fn test_concurrency() {
 }
 
 thread_local! {
-    pub static THREAD_LOCAL_FILE: RefCell<Option<File>> = RefCell::new(None);
+    pub static THREAD_LOCAL_FILE: RefCell<Option<File>> = const { RefCell::new(None) };
 }
 
 struct Store {
@@ -138,7 +138,7 @@ impl Command for Store {
         THREAD_LOCAL_FILE.with(
             |tlf| {
                 let mut f = tlf.replace(None).unwrap();
-                f.write(format!("{}\n", self.i).as_bytes()).expect("Failed writing a number to test file");
+                f.write_all(format!("{}\n", self.i).as_bytes()).expect("Failed writing a number to test file");
                 tlf.replace(Some(f))
             }
         );
@@ -197,7 +197,7 @@ fn test_in_all_threads_mut() {
         let f = File::open(path).unwrap();
         total.add_assign(BufReader::new(f).lines().count());
     }
-    assert_eq!((), tp.join().unwrap());
+    tp.join().unwrap();
     assert_eq!(total, 1024);
 }
 

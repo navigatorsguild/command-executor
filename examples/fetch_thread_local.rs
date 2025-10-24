@@ -17,7 +17,7 @@ use command_executor::thread_pool::ThreadPool;
 use command_executor::thread_pool_builder::ThreadPoolBuilder;
 
 thread_local! {
-    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = RefCell::new(None);
+    pub static NEXT_THREAD_POOL: RefCell<Option<Arc<RwLock<ThreadPool>>>> = const { RefCell::new(None) };
     pub static INTERMEDIATE_RESULT: RefCell<HashSet<i32>> = RefCell::new(HashSet::new());
 }
 

@@ -103,15 +103,13 @@ impl Command for ProcessingCommand {
 }
 
 fn create_thread_pool(name: &str, tasks: usize, queue_size: usize, queue_type: QueueType) -> Result<ThreadPool, anyhow::Error> {
-    Ok(
-        ThreadPoolBuilder::new()
-            .with_name_str(name)
-            .with_tasks(tasks)
-            .with_queue_type(queue_type)
-            .with_queue_size(queue_size)
-            .with_shutdown_mode(ShutdownMode::CompletePending)
-            .build()?
-    )
+    ThreadPoolBuilder::new()
+        .with_name_str(name)
+        .with_tasks(tasks)
+        .with_queue_type(queue_type)
+        .with_queue_size(queue_size)
+        .with_shutdown_mode(ShutdownMode::CompletePending)
+        .build()
 }
 
 fn shutdown(thread_pool: &mut ThreadPool) -> Result<(), anyhow::Error> {
@@ -136,7 +134,7 @@ fn bench_name(base: &str, magnitude: usize) -> String {
 
 fn increasing_workloads(magnitude: usize, queue_size: usize, commands: usize, string_length: usize) -> Result<(), Error> {
     let mut benchmarks = Benchmarks::new(bench_name("blocking-queue-increasing-workloads", magnitude).as_str());
-    let work_points: Vec<usize> = (1..=20).into_iter().map(|i| i * magnitude).collect();
+    let work_points: Vec<usize> = (1..=20).map(|i| i * magnitude).collect();
     benchmarks.add(
         bench_name("blocking-queue-baseline", magnitude).as_str(),
         work0,
